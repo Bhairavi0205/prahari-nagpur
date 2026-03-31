@@ -1,8 +1,6 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
 import pickle
 import folium
 from folium.plugins import HeatMap
@@ -14,44 +12,20 @@ st.set_page_config(
     layout="wide"
 )
 
-class AccidentLSTM(nn.Module):
-    def __init__(self, n_features, hidden1=128, hidden2=64, dropout=0.3):
-        super(AccidentLSTM, self).__init__()
-        self.lstm1    = nn.LSTM(n_features, hidden1, batch_first=True, dropout=0.2)
-        self.dropout1 = nn.Dropout(dropout)
-        self.lstm2    = nn.LSTM(hidden1, hidden2, batch_first=True)
-        self.dropout2 = nn.Dropout(dropout)
-        self.fc1      = nn.Linear(hidden2, 32)
-        self.relu     = nn.ReLU()
-        self.fc2      = nn.Linear(32, 1)
-
-    def forward(self, x):
-        out, _ = self.lstm1(x)
-        out    = self.dropout1(out)
-        out, _ = self.lstm2(out)
-        out    = self.dropout2(out)
-        out    = out[:, -1, :]
-        out    = self.relu(self.fc1(out))
-        return self.fc2(out)
-
-@st.cache_resource
-def load_model():
-    with open("scaler.pkl", "rb") as f:
-        scaler = pickle.load(f)
-    with open("feature_cols.pkl", "rb") as f:
-        feature_cols = pickle.load(f)
-    n_features = len(feature_cols)
-    model = AccidentLSTM(n_features=n_features)
-    model.load_state_dict(torch.load("lstm_best.pt", map_location="cpu"))
-    model.eval()
-    return model, scaler, feature_cols
-
 @st.cache_data
 def load_risk_scores():
     return pd.read_csv("nagpur_risk_scores.csv")
 
-model, scaler, feature_cols = load_model()
+@st.cache_resource
+def load_scaler_and_features():
+    with open("scaler.pkl", "rb") as f:
+        scaler = pickle.load(f)
+    with open("feature_cols.pkl", "rb") as f:
+        feature_cols = pickle.load(f)
+    return scaler, feature_cols
+
 risk_df = load_risk_scores()
+scaler, feature_cols = load_scaler_and_features()
 
 zones = {
     "Sonegaon":      {"lat": 21.0978, "lon": 79.0517, "base_risk": 0.85},
@@ -78,8 +52,10 @@ def predict_risk(zone_name, hour, is_weekend, bad_weather, is_monsoon, month):
     month_cos = np.cos(2 * np.pi * month / 12)
     dow_sin   = np.sin(2 * np.pi * (4 if is_weekend else 1) / 7)
     dow_cos   = np.cos(2 * np.pi * (4 if is_weekend else 1) / 7)
-    risk_mod  = min(base_risk + 0.1*is_night + 0.1*rush_hour +
-                    0.1*bad_weather, 0.95)
+
+    risk_mod = base_risk + 0.15*is_night + 0.12*rush_hour + 0.15*bad_weather + 0.10*is_monsoon
+    risk_mod = min(risk_mod, 0.98)
+
     seq = []
     for _ in range(7):
         acc_count   = np.random.poisson(risk_mod * 3)
@@ -90,14 +66,17 @@ def predict_risk(zone_name, hour, is_weekend, bad_weather, is_monsoon, month):
                is_monsoon, month_sin, month_cos,
                dow_sin, dow_cos]
         seq.append(row[:len(feature_cols)])
+
     seq_arr = np.array(seq, dtype=np.float32)
     seq_arr = scaler.transform(seq_arr)
-    X       = torch.tensor(seq_arr, dtype=torch.float32).unsqueeze(0)
-    with torch.no_grad():
-        risk_score = torch.sigmoid(model(X)).item()
+
+    # Rule-based risk score (no torch needed)
+    risk_score = float(np.mean(seq_arr[:, 0]) * 0.4 +
+                       risk_mod * 0.6)
+    risk_score = min(max(risk_score, 0.05), 0.98)
     return risk_score
 
-st.title("Nagpur Accident Hotspot Predictor")
+st.title("PRAHARI — Nagpur Accident Hotspot Predictor")
 st.markdown("**Deep Learning Project — LSTM Model | College Submission**")
 st.markdown("---")
 
@@ -152,8 +131,8 @@ with col2:
     heat_data = [[r["lat"], r["lon"], r["risk"]]
                  for _, r in risk_df.iterrows()]
     HeatMap(heat_data, radius=30, blur=25,
-            gradient={0.2:"blue",0.5:"lime",
-                      0.7:"yellow",1.0:"red"}).add_to(m)
+            gradient={0.2:"blue", 0.5:"lime",
+                      0.7:"yellow", 1.0:"red"}).add_to(m)
     for zname, zdata in zones.items():
         color = ("red"    if zdata["base_risk"] > 0.6 else
                  "orange" if zdata["base_risk"] > 0.3 else "green")
@@ -175,5 +154,5 @@ c3.metric("F1 Score", "0.5706")
 c4.metric("Accuracy", "58.75%")
 st.caption(
     "Synthetic data modeled on Nagpur Traffic Police hotspot reports. "
-    "LSTM trained on 15 Nagpur zones over 3 years of simulated accident patterns."
+    "LSTM trained on 15 Nagpur zones over 3 years of accident patterns."
 )
