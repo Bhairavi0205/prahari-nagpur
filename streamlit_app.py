@@ -36,19 +36,19 @@ class AccidentLSTM(nn.Module):
 
 @st.cache_resource
 def load_model():
-    with open("models/scaler.pkl", "rb") as f:
+    with open("scaler.pkl", "rb") as f:
         scaler = pickle.load(f)
-    with open("data/processed/feature_cols.pkl", "rb") as f:
+    with open("feature_cols.pkl", "rb") as f:
         feature_cols = pickle.load(f)
     n_features = len(feature_cols)
     model = AccidentLSTM(n_features=n_features)
-    model.load_state_dict(torch.load("models/lstm_best.pt", map_location="cpu"))
+    model.load_state_dict(torch.load("lstm_best.pt", map_location="cpu"))
     model.eval()
     return model, scaler, feature_cols
 
 @st.cache_data
 def load_risk_scores():
-    return pd.read_csv("data/processed/nagpur_risk_scores.csv")
+    return pd.read_csv("nagpur_risk_scores.csv")
 
 model, scaler, feature_cols = load_model()
 risk_df = load_risk_scores()
